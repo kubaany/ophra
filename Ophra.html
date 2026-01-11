@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Kuba Tycoon – Mobilní Slotový 2D Top-Down</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #0b0d12;
+            color: #eee;
+            font-family: system-ui, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #gameContainer {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #gameCanvas {
+            background: #131722;
+            display: block;
+            margin: 0 auto;
+            image-rendering: pixelated;
+            border-bottom: 1px solid #222;
+        }
+
+        #uiBar {
+            background: #10131a;
+            color: #ccc;
+            padding: 4px 6px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid #222;
+        }
+
+        #uiLeft span, #uiRight span {
+            margin-right: 10px;
+        }
+
+        .keyHint {
+            padding: 1px 4px;
+            border-radius: 3px;
+            border: 1px solid #555;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+
+        /* Tlačítka vpravo (mobil) */
+        #rightButtons {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 20;
+        }
+
+        .uiBtn {
+            background: #1a2131;
+            border: 1px solid #2f3a52;
+            color: #d5e0ff;
+            padding: 8px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            min-width: 80px;
+            text-align: center;
+        }
+
+        .uiBtn:active, .uiBtn:hover {
+            background: #253048;
+        }
+
+        /* Mobilní joystick vlevo dole */
+        #joystickWrapper {
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            width: 140px;
+            height: 140px;
+            z-index: 10;
+            opacity: 0.9;
+        }
+
+        #joystickBase {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 2px solid #444;
+            background: rgba(20, 25, 35, 0.9);
+            left: 10px;
+            top: 10px;
+        }
+
+        #joystickStick {
+            position: absolute;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: #3a76ff;
+            left: 44px;
+            top: 44px;
+        }
+
+        /* Kruhové menu kolem hráče */
+        #radialMenu {
+            position: absolute;
+            pointer-events: none; /* ovladatelné jen přes tlačítka uvnitř */
+            z-index: 30;
+            display: none;
+        }
+
+        .radialBtn {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            background: #1f2638;
+            border: 1px solid #3c5478;
+            color: #e0ecff;
+            padding: 6px 10px;
+            border-radius: 16px;
+            font-size: 11px;
+            white-space: nowrap;
+            pointer-events: auto;
+        }
+
+        .radialBtn:active, .radialBtn:hover {
+            background: #30405e;
+        }
+    </style>
+</head>
+<body>
+<div id="gameContainer">
+    <canvas id="gameCanvas"></canvas>
+    <div id="uiBar">
+        <div id="uiLeft">
+            <span id="modeLabel">Režim: TOP-DOWN</span>
+            <span id="ecoLabel"></span>
+        </div>
+        <div id="uiRight">
+            <span>Ovládání:
+                <span class="keyHint">WASD</span> / joystick
+                <span class="keyHint">H</span> nebo „Najmout“
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- Joystick vlevo -->
+<div id="joystickWrapper">
+    <div id="joystickBase"></div>
+    <div id="joystickStick"></div>
+</div>
+
+<!-- Akční tlačítka vpravo (mobil + PC) -->
+<div id="rightButtons">
+    <button class="uiBtn" id="hireBtn">Najmout (-500)</button>
+    <button class="uiBtn" id="actionBtn">AKCE</button>
+    <button class="uiBtn" id="workBtn">PRÁCE / OPRAVA</button>
+</div>
+
+<!-- Kruhové menu -->
+<div id="radialMenu">
+    <button class="radialBtn" id="radialTop">Top</button>
+    <button class="radialBtn" id="radialLeft">Left</button>
+    <button class="radialBtn" id="radialRight">Right</button>
+    <button class="radialBtn" id="radialBottom">Bottom</button>
+</div>
+
+<script>
+//==============================
+// CANVAS + RESPONSIVE
+//==============================
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+    const w = window.innerWidth;
+    const h = window.innerHeight - document.getElementById("uiBar").offsetHeight;
+    const targetRatio = 16 / 9;
+    let cw = w;
+    let ch = Math.round(w / targetRatio);
+    if (ch > h) {
+        ch = h;
+        cw = Math.round(h * targetRatio);
+    }
+    canvas.width = cw;
+    canvas.height = ch;
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+const GAME_WIDTH = () => canvas.width;
+const GAME_HEIGHT = () => canvas.height;
+const TILE_SIZE = 32;
+
+// UI refs
+const modeLabel = document.getElementById("modeLabel");
+const ecoLabel = document.getElementById("ecoLabel");
+const hireBtn = document.getElementById("hireBtn");
+const actionBtn = document.getElementById("actionBtn");
+const workBtn = document.getElementElementById ? null : null; // fallback ochrana (starší prohlížeče)
+const realWorkBtn = document.getElementById("workBtn");
+
+// Radial menu refs
+const radialMenu = document.getElementById("radialMenu");
+const radialTop = document.getElementById("radialTop");
+const radialLeft = document.getElementById("radialLeft");
+const radialRight = document.getElementById("radialRight");
+const radialBottom = document.getElementById("radialBottom");
+
+//==============================
+// KONSTANTY
+//==============================
+const GAME_MODE = {
+    TOP_DOWN: "topDown"
+};
+
+const BUILDING_TYPES = {
+    OFFICE: {
+        id: "office",
+        name: "Office",
+        baseCapacity: 3,
+        incomeMult: 1.2,
+        buildCost: 1000
+    },
+    FACTORY: {
+        id: "factory",
+        name: "Továrna",
+        baseCapacity: 4,
+        incomeMult: 1.6,
+        buildCost: 1500
+    },
+    LAB: {
+        id: "lab",
+        name: "Laboratoř",
+        baseCapacity: 2,
+        incomeMult: 2.1,
+        buildCost: 2000
+    }
+};
+
+//==============================
+// STAV HRY
+//==============================
+const gameState = {
+    mode: GAME_MODE.TOP_DOWN,
+
+    player: {
+        x: 5 * TILE_SIZE,
+        y: 7 * TILE_SIZE,
+        speed: 3,
+        width: 26,
+        height: 26,
+        insideSlotId: null
+    },
+
+    world: {
+        slots: []
+    },
+
+    economy: {
+        money: 5000,
+        incomePerTick: 0,
+        expensesPerTick: 0,
+        tickInterval: 1000,
+        tickTimer: 0
+    },
+
+    workers: [],
+
+    events: {
+        timer: 0,
+        nextEventIn: 8000 + Math.random() * 8000,
+        activeMessages: []
+    },
+
+    keys: {},
+    moveVector: { x: 0, y: 0 },
+
+    radial: {
+        visible: false,
+        slot: null,
+        mode: null // "locked" | "empty" | "built"
+    }
+};
+
+//==============================
+// SLOTY – inicializace
+//==============================
+function initSlots() {
+    const rows = 2;
+    const cols = 4;
+    const startX = 6 * TILE_SIZE;
+    const startY = 3 * TILE_SIZE;
+    const gapX = 5 * TILE_SIZE;
+    const gapY = 5 * TILE_SIZE;
+    let idCounter = 1;
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            gameState.world.slots.push({
+                id: "S" + idCounter++,
+                x: startX + c * gapX,
+                y: startY + r * gapY,
+                width: 3 * TILE_SIZE,
+                height: 3 * TILE_SIZE,
+                unlocked: (r === 0 && c < 2),
+                unlockCost: 2000 + (r * cols + c) * 500,
+                building: null
+            });
+        }
+    }
+}
+
+//==============================
+// KLÁVESY + JOYSTICK
+//==============================
+window.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    gameState.keys[key] = true;
+    if (key === "h") hireWorker();
+});
+
+window.addEventListener("keyup", (e) => {
+    gameState.keys[e.key.toLowerCase()] = false;
+});
+
+hireBtn.addEventListener("click", hireWorker);
+actionBtn.addEventListener("click", () => openRadialForNearestSlot());
+realWorkBtn.addEventListener("click", () => workOrRepairNearest());
+
+// joystick
+const joyBase = document.getElementById("joystickBase");
+const joyStick = document.getElementById("joystickStick");
+let joyActive = false;
+let joyCenter = { x: 0, y: 0 };
+
+joyBase.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    joyActive = true;
+    const rect = joyBase.getBoundingClientRect();
+    joyCenter = { x: rect.width / 2, y: rect.height / 2 };
+    handleJoystickMove(e.touches[0], rect);
+});
+joyBase.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    if (!joyActive) return;
+    const rect = joyBase.getBoundingClientRect();
+    handleJoystickMove(e.touches[0], rect);
+});
+joyBase.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    joyActive = false;
+    gameState.moveVector.x = 0;
+    gameState.moveVector.y = 0;
+    joyStick.style.left = "44px";
+    joyStick.style.top = "44px";
+});
+
+function handleJoystickMove(touch, rect) {
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    const dx = x - rect.width / 2;
+    const dy = y - rect.height / 2;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const maxDist = rect.width / 2;
+
+    let nx = dx;
+    let ny = dy;
+    if (dist > maxDist) {
+        nx = (dx / dist) * maxDist;
+        ny = (dy / dist) * maxDist;
+    }
+
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    joyStick.style.left = (cx + nx - joyStick.offsetWidth / 2) + "px";
+    joyStick.style.top = (cy + ny - joyStick.offsetHeight / 2) + "px";
+
+    gameState.moveVector.x = nx / maxDist;
+    gameState.moveVector.y = ny / maxDist;
+}
+
+//==============================
+// EKONOMIKA
+//==============================
+function economyTick(delta) {
+    const eco = gameState.economy;
+    eco.tickTimer += delta;
+    if (eco.tickTimer >= eco.tickInterval) {
+        eco.tickTimer = 0;
+        const net = eco.incomePerTick - eco.expensesPerTick;
+        eco.money += net;
+        updateEcoUI();
+    }
+}
+
+function updateEcoUI() {
+    const eco = gameState.economy;
+    ecoLabel.textContent =
+        `Peníze: ${Math.round(eco.money)} | Příjem: +${Math.round(eco.incomePerTick)}/s | Náklady: -${Math.round(eco.expensesPerTick)}/s | Prac.: ${gameState.workers.length}`;
+}
+
+function recalcIncome() {
+    let income = 0;
+    for (const slot of gameState.world.slots) {
+        if (!slot.building) continue;
+        const b = slot.building;
+        const workersHere = gameState.workers.filter(w => w.assignedSlotId === slot.id);
+        let workerPower = 0;
+        for (const w of workersHere) {
+            workerPower += w.productivity * (1 + (w.level - 1) * 0.2);
+        }
+        const healthFactor = b.health / 100;
+        income += workerPower * b.incomeMult * healthFactor;
+    }
+    if (gameState.player.insideSlotId) income *= 1.2;
+    gameState.economy.incomePerTick = income;
+}
+
+//==============================
+// ZAMĚSTNANCI
+//==============================
+function hireWorker() {
+    const eco = gameState.economy;
+    const cost = 500;
+    if (eco.money < cost) {
+        pushEventMessage("Nedostatek peněz na nábor!");
+        return;
+    }
+
+    const availableSlots = gameState.world.slots.filter(s => {
+        if (!s.building) return false;
+        const b = s.building;
+        const workersHere = gameState.workers.filter(w => w.assignedSlotId === s.id).length;
+        return workersHere < b.maxWorkers;
+    });
+
+    if (availableSlots.length === 0) {
+        pushEventMessage("Žádná budova nemá volné místo!");
+        return;
+    }
+
+    eco.money -= cost;
+
+    const worker = {
+        name: "Worker " + (gameState.workers.length + 1),
+        level: 1,
+        productivity: 5 + Math.random() * 10,
+        assignedSlotId: null
+    };
+
+    const slot = availableSlots[Math.floor(Math.random() * availableSlots.length)];
+    worker.assignedSlotId = slot.id;
+    gameState.workers.push(worker);
+
+    pushEventMessage(worker.name + " nastoupil do " + slot.building.typeName + ".");
+    recalcIncome();
+    updateEcoUI();
+}
+
+//==============================
+// EVENTY
+//==============================
+function updateEvents(delta) {
+    const ev = gameState.events;
+    const eco = gameState.economy;
+    ev.timer += delta;
+    if (ev.timer >= ev.nextEventIn) {
+        ev.timer = 0;
+        ev.nextEventIn = 8000 + Math.random() * 8000;
+
+        const builtSlots = gameState.world.slots.filter(s => s.building);
+        if (!builtSlots.length) return;
+
+        const slot = builtSlots[Math.floor(Math.random() * builtSlots.length)];
+        const b = slot.building;
+        const roll = Math.random();
+
+        if (roll < 0.4) {
+            b.health = Math.max(20, b.health - (10 + Math.random() * 20));
+            pushEventMessage(`Porucha v ${b.typeName} (${slot.id})! Health ${Math.round(b.health)}%.`);
+        } else if (roll < 0.7) {
+            eco.money -= 500;
+            pushEventMessage("Inspekce! Pokuta 500.");
+        } else {
+            eco.money += 1000;
+            pushEventMessage("VIP návštěva! Bonus 1000.");
+        }
+
+        recalcIncome();
+        updateEcoUI();
+    }
+}
+
+function pushEventMessage(text) {
+    const list = gameState.events.activeMessages;
+    list.unshift({ text, time: performance.now() });
+    if (list.length > 3) list.pop();
+}
+
+//==============================
+// SLOTY – hledání a interakce
+//==============================
+function getNearestSlotInRange(range = 70) {
+    const p = gameState.player;
+    let best = null;
+    let bestDist = Infinity;
+    for (const s of gameState.world.slots) {
+        const cx = s.x + s.width / 2;
+        const cy = s.y + s.height / 2;
+        const dx = (p.x + p.width / 2) - cx;
+        const dy = (p.y + p.height / 2) - cy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < range && d < bestDist) {
+            bestDist = d;
+            best = s;
+        }
+    }
+    return best;
+}
+
+//==============================
+// KRUHOVÉ MENU
+//==============================
+function openRadialForNearestSlot() {
+    const slot = getNearestSlotInRange();
+    if (!slot) {
+        pushEventMessage("Žádný slot nablízku.");
+        hideRadialMenu();
+        return;
+    }
+
+    gameState.radial.slot = slot;
+    const r = gameState.radial;
+
+    if (!slot.unlocked) {
+        r.mode = "locked";
+        setupRadialLocked(slot);
+    } else if (!slot.building) {
+        r.mode = "empty";
+        setupRadialEmpty(slot);
+    } else {
+        r.mode = "built";
+        setupRadialBuilt(slot);
+    }
+
+    showRadialAroundPlayer();
+}
+
+function showRadialAroundPlayer() {
+    const p = gameState.player;
+    const screenX = p.x;
+    const screenY = p.y;
+
+    radialMenu.style.display = "block";
+    radialMenu.style.left = screenX + "px";
+    radialMenu.style.top = screenY + "px";
+    gameState.radial.visible = true;
+
+    const radius = 60;
+    positionRadialButton(radialTop, 0, -radius);
+    positionRadialButton(radialLeft, -radius, 0);
+    positionRadialButton(radialRight, radius, 0);
+    positionRadialButton(radialBottom, 0, radius);
+}
+
+function positionRadialButton(btn, dx, dy) {
+    btn.style.left = (0 + dx) + "px";
+    btn.style.top = (0 + dy) + "px";
+}
+
+function hideRadialMenu() {
+    radialMenu.style.display = "none";
+    gameState.radial.visible = false;
+    gameState.radial.slot = null;
+    gameState.radial.mode = null;
+}
+
+// režim: slot zamčený → jen "Koupit" + "Zavřít"
+function setupRadialLocked(slot) {
+    radialTop.style.display = "none";
+    radialLeft.style.display = "none";
+
+    radialRight.style.display = "block";
+    radialRight.textContent = "Koupit (" + slot.unlockCost + ")";
+
+    radialBottom.style.display = "block";
+    radialBottom.textContent = "Zavřít";
+
+    radialRight.onclick = () => {
+        const eco = gameState.economy;
+        if (eco.money < slot.unlockCost) {
+            pushEventMessage("Nedostatek peněz na koupi slotu.");
+            return;
+        }
+        eco.money -= slot.unlockCost;
+        slot.unlocked = true;
+        pushEventMessage("Koupil jsi slot " + slot.id + ".");
+        updateEcoUI();
+        hideRadialMenu();
+    };
+
+    radialBottom.onclick = () => hideRadialMenu();
+}
+
+// režim: slot prázdný → Office / Factory / Lab / Zavřít
+function setupRadialEmpty(slot) {
+    radialTop.style.display = "block";
+    radialLeft.style.display = "block";
+    radialRight.style.display = "block";
+    radialBottom.style.display = "block";
+
+    radialTop.textContent = "Office (" + BUILDING_TYPES.OFFICE.buildCost + ")";
+    radialLeft.textContent = "Továrna (" + BUILDING_TYPES.FACTORY.buildCost + ")";
+    radialRight.textContent = "Lab (" + BUILDING_TYPES.LAB.buildCost + ")";
+    radialBottom.textContent = "Zavřít";
+
+    radialTop.onclick = () => buildOnSlot(slot, BUILDING_TYPES.OFFICE);
+    radialLeft.onclick = () => buildOnSlot(slot, BUILDING_TYPES.FACTORY);
+    radialRight.onclick = () => buildOnSlot(slot, BUILDING_TYPES.LAB);
+    radialBottom.onclick = () => hideRadialMenu();
+}
+
+function buildOnSlot(slot, type) {
+    const eco = gameState.economy;
+    if (eco.money < type.buildCost) {
+        pushEventMessage("Nedostatek peněz na stavbu " + type.name + ".");
+        return;
+    }
+    eco.money -= type.buildCost;
+    slot.building = {
+        typeId: type.id,
+        typeName: type.name,
+        level: 1,
+        maxWorkers: type.baseCapacity,
+        incomeMult: type.incomeMult,
+        health: 100
+    };
+    pushEventMessage("Postavil jsi " + type.name + " na " + slot.id + ".");
+    recalcIncome();
+    updateEcoUI();
+    hideRadialMenu();
+}
+
+// režim: budova existuje → Upgrade / Pracovat / Opravit / Zavřít
+function setupRadialBuilt(slot) {
+    const b = slot.building;
+    radialTop.style.display = "block";
+    radialLeft.style.display = "block";
+    radialRight.style.display = "block";
+    radialBottom.style.display = "block";
+
+    const upgradeCost = getUpgradeCostForBuilding(b);
+
+    radialTop.textContent = "Upgrade (" + upgradeCost + ")";
+    radialLeft.textContent = "Pracovat";
+    radialRight.textContent = "Opravit";
+    radialBottom.textContent = "Zavřít";
+
+    radialTop.onclick = () => {
+        const eco = gameState.economy;
+        if (eco.money < upgradeCost) {
+            pushEventMessage("Nedostatek peněz na upgrade.");
+            return;
+        }
+        eco.money -= upgradeCost;
+        b.level++;
+        b.maxWorkers += 2;
+        b.incomeMult *= 1.2;
+        b.health = Math.min(100, b.health + 20);
+        pushEventMessage(`Upgrade ${b.typeName} na Lv.${b.level}.`);
+        recalcIncome();
+        updateEcoUI();
+        hideRadialMenu();
+    };
+
+    radialLeft.onclick = () => {
+        gameState.player.insideSlotId = slot.id;
+        pushEventMessage("Pracuješ v " + b.typeName + " (boost příjmu).");
+        recalcIncome();
+        setTimeout(() => {
+            if (gameState.player.insideSlotId === slot.id) {
+                gameState.player.insideSlotId = null;
+                recalcIncome();
+            }
+        }, 5000);
+        hideRadialMenu();
+    };
+
+    radialRight.onclick = () => {
+        if (b.health >= 100) {
+            pushEventMessage(b.typeName + " je v pořádku.");
+        } else {
+            b.health = Math.min(100, b.health + 15);
+            pushEventMessage("Oprava " + b.typeName + " (" + slot.id + "), health " + Math.round(b.health) + "%.");
+            recalcIncome();
+            updateEcoUI();
+        }
+        hideRadialMenu();
+    };
+
+    radialBottom.onclick = () => hideRadialMenu();
+}
+
+function getUpgradeCostForBuilding(b) {
+    let base = 1500;
+    if (b.typeId === BUILDING_TYPES.FACTORY.id) base = 2000;
+    if (b.typeId === BUILDING_TYPES.LAB.id) base = 2500;
+    return Math.round(base * Math.pow(1.5, b.level - 1));
+}
+
+// tlačítko PRÁCE/OPRAVA: rychlá akce – neotevírá menu
+function workOrRepairNearest() {
+    const slot = getNearestSlotInRange();
+    if (!slot || !slot.building || !slot.unlocked) {
+        pushEventMessage("Žádná budova nablízku.");
+        return;
+    }
+    const b = slot.building;
+    if (b.health < 100) {
+        b.health = Math.min(100, b.health + 15);
+        pushEventMessage("Oprava " + b.typeName + " (" + slot.id + "), health " + Math.round(b.health) + "%.");
+        recalcIncome();
+        updateEcoUI();
+    } else {
+        gameState.player.insideSlotId = slot.id;
+        pushEventMessage("Pracuješ v " + b.typeName + " (boost příjmu).");
+        recalcIncome();
+        setTimeout(() => {
+            if (gameState.player.insideSlotId === slot.id) {
+                gameState.player.insideSlotId = null;
+                recalcIncome();
+            }
+        }, 5000);
+    }
+}
+
+//==============================
+// UPDATE
+//==============================
+let lastTime = performance.now();
+
+function update() {
+    const now = performance.now();
+    const delta = now - lastTime;
+    lastTime = now;
+
+    updateTopDown(delta);
+    economyTick(delta);
+    updateEvents(delta);
+
+    // pokud hráč odejde daleko od slotu, menu zavřeme
+    if (gameState.radial.visible && gameState.radial.slot) {
+        const s = gameState.radial.slot;
+        const p = gameState.player;
+        const cx = s.x + s.width / 2;
+        const cy = s.y + s.height / 2;
+        const dx = (p.x + p.width / 2) - cx;
+        const dy = (p.y + p.height / 2) - cy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > 100) hideRadialMenu();
+    }
+}
+
+function updateTopDown(delta) {
+    const p = gameState.player;
+    const keys = gameState.keys;
+    const mv = gameState.moveVector;
+
+    let dx = 0, dy = 0;
+
+    if (keys["w"] || keys["arrowup"]) dy -= 1;
+    if (keys["s"] || keys["arrowdown"]) dy += 1;
+    if (keys["a"] || keys["arrowleft"]) dx -= 1;
+    if (keys["d"] || keys["arrowright"]) dx += 1;
+
+    if (Math.abs(mv.x) > 0.1 || Math.abs(mv.y) > 0.1) {
+        dx = mv.x;
+        dy = mv.y;
+    }
+
+    if (dx !== 0 && dy !== 0) {
+        const inv = 1 / Math.sqrt(2);
+        dx *= inv;
+        dy *= inv;
+    }
+
+    p.x += dx * p.speed;
+    p.y += dy * p.speed;
+
+    p.x = Math.max(0, Math.min(GAME_WIDTH() - p.width, p.x));
+    p.y = Math.max(0, Math.min(GAME_HEIGHT() - p.height, p.y));
+
+    modeLabel.textContent = "Režim: TOP-DOWN";
+}
+
+//==============================
+// RENDER
+//==============================
+function render() {
+    ctx.clearRect(0, 0, GAME_WIDTH(), GAME_HEIGHT());
+    renderTopDown();
+    renderEvents();
+}
+
+function renderTopDown() {
+    ctx.fillStyle = "#151924";
+    ctx.fillRect(0, 0, GAME_WIDTH(), GAME_HEIGHT());
+
+    // grid
+    ctx.strokeStyle = "#222735";
+    ctx.lineWidth = 1;
+    for (let x = 0; x < GAME_WIDTH(); x += TILE_SIZE) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, GAME_HEIGHT());
+        ctx.stroke();
+    }
+    for (let y = 0; y < GAME_HEIGHT(); y += TILE_SIZE) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(GAME_WIDTH(), y);
+        ctx.stroke();
+    }
+
+    // sloty
+    for (const s of gameState.world.slots) {
+        if (!s.unlocked) {
+            ctx.fillStyle = "rgba(40,40,60,0.7)";
+            ctx.fillRect(s.x, s.y, s.width, s.height);
+            ctx.strokeStyle = "#555";
+            ctx.strokeRect(s.x, s.y, s.width, s.height);
+
+            ctx.fillStyle = "#ffd070";
+            ctx.font = "11px system-ui";
+            ctx.fillText("Koupit", s.x + 6, s.y + 16);
+            ctx.fillText(s.unlockCost, s.x + 6, s.y + 30);
+        } else if (!s.building) {
+            ctx.fillStyle = "rgba(60,80,60,0.5)";
+            ctx.fillRect(s.x, s.y, s.width, s.height);
+            ctx.strokeStyle = "#7bbf7b";
+            ctx.strokeRect(s.x, s.y, s.width, s.height);
+
+            ctx.fillStyle = "#d8ffd8";
+            ctx.font = "11px system-ui";
+            ctx.fillText("Prázdné", s.x + 6, s.y + 16);
+            ctx.fillText("AKCE", s.x + 6, s.y + 30);
+        } else {
+            const b = s.building;
+            ctx.fillStyle = b.typeId === "factory" ? "#7a4b3a"
+                          : b.typeId === "lab" ? "#425f6f"
+                          : "#425d9b";
+            ctx.fillRect(s.x, s.y, s.width, s.height);
+
+            ctx.strokeStyle = "#c8d4ff";
+            ctx.strokeRect(s.x, s.y, s.width, s.height);
+
+            const w = s.width - 8;
+            const healthW = w * (b.health / 100);
+            ctx.fillStyle = "#222";
+            ctx.fillRect(s.x + 4, s.y + s.height - 10, w, 6);
+            ctx.fillStyle = b.health > 60 ? "#6fd96f" : b.health > 30 ? "#e0c05f" : "#e05f5f";
+            ctx.fillRect(s.x + 4, s.y + s.height - 10, healthW, 6);
+
+            ctx.fillStyle = "#e0e8ff";
+            ctx.font = "11px system-ui";
+            ctx.fillText(b.typeName + " Lv." + b.level, s.x + 4, s.y + 14);
+
+            const workersHere = gameState.workers.filter(w => w.assignedSlotId === s.id).length;
+            ctx.fillText("W: " + workersHere + "/" + b.maxWorkers, s.x + 4, s.y + 28);
+        }
+    }
+
+    // hráč
+    const p = gameState.player;
+    const px = p.x;
+    const py = p.y;
+
+    ctx.fillStyle = "#ffe27a";
+    ctx.fillRect(px, py, p.width, p.height);
+
+    ctx.fillStyle = "#ffcf55";
+    ctx.fillRect(px + 6, py - 8, 14, 14);
+
+    ctx.fillStyle = "#222";
+    ctx.fillRect(px + 9, py - 4, 3, 3);
+    ctx.fillRect(px + 14, py - 4, 3, 3);
+
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(px + p.width / 2, py + p.height, p.width / 2, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function renderEvents() {
+    const messages = gameState.events.activeMessages;
+    const now = performance.now();
+    let y = 30;
+    for (const m of messages) {
+        const age = now - m.time;
+        if (age > 5000) continue;
+        const alpha = 1 - age / 5000;
+
+        ctx.fillStyle = `rgba(0,0,0,${0.6 * alpha})`;
+        ctx.fillRect(20, y - 16, 420, 22);
+
+        ctx.fillStyle = `rgba(255,220,120,${alpha})`;
+        ctx.font = "13px system-ui";
+        ctx.fillText(m.text, 28, y);
+        y += 24;
+    }
+}
+
+//==============================
+// GAME LOOP
+//==============================
+let lastLoopTime = performance.now();
+function gameLoop() {
+    const now = performance.now();
+    const delta = now - lastLoopTime;
+    lastLoopTime = now;
+
+    update();
+    render();
+    requestAnimationFrame(gameLoop);
+}
+
+// START
+initSlots();
+updateEcoUI();
+gameLoop();
+</script>
+</body>
+</html>
